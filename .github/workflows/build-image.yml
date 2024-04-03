@@ -1,0 +1,73 @@
+name: Build, Push Image
+
+on:
+  workflow_dispatch:
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      image_name_single_arch: ${{ steps.set_output.outputs.image_name_single_arch }}
+    steps:
+      - name: Set the Image Name
+        id: set_output
+        run: echo "image_name_single_arch=ghcr.io/${{ github.repository }}_single-arch" >> $GITHUB_OUTPUT
+
+
+  build-linux-amd64:
+    needs: setup
+    uses: ./.github/workflows/reusable--docker-build.yaml
+    with:
+      images: ${{ needs.setup.outputs.image_name_single_arch }}
+      context: .
+      platforms: linux/amd64
+      goarch: amd64
+
+  build-linux-arm64:
+    needs: setup
+    uses: ./.github/workflows/reusable--docker-build.yaml
+    with:
+      images: ${{ needs.setup.outputs.image_name_single_arch }}
+      context: .
+      platforms: linux/arm64
+      goarch: arm64
+
+  push-multi-arch-manifest:
+    needs:
+      - setup
+      - build-linux-amd64
+      - build-linux-arm64
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+
+    permissions:
+      packages: write
+
+    steps:
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+          labels: |
+            org.opencontainers.image.description=GitHub Runner KMS (Go)
+
+      - name: Push multi-architectures container image manifest
+        uses: int128/docker-manifest-create-action@v2
+        id: build
+        with:
+          tags: ${{ steps.meta.outputs.tags }}
+          sources: |
+            ${{ needs.setup.outputs.image_name_single_arch }}@${{ needs.build-linux-amd64.outputs.digest }}
+            ${{ needs.setup.outputs.image_name_single_arch }}@${{ needs.build-linux-arm64.outputs.digest }}
